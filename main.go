@@ -25,7 +25,7 @@ func main() {
     apiRouter.HandleFunc("/users", userHandler.CreateUser).Methods("POST")
     apiRouter.HandleFunc("/users/{id}", userHandler.UpdateUser).Methods("PUT")
     apiRouter.HandleFunc("/users/{id}", userHandler.DeleteUser).Methods("DELETE")
-	apiRouter.HandleFunc("/users/{id}/avatar", userHandler.UploadUserAvatar).Methods("POST")
+    apiRouter.HandleFunc("/users/{id}/avatar", userHandler.UploadUserAvatar).Methods("POST")
     
     // Метрики (без rate limiting)
     metrics.RegisterMetricsHandler(router)
