@@ -2,6 +2,8 @@ package handlers
 
 import (
     "encoding/json"
+    "io"
+    "log"
     "net/http"
     "strconv"
     
@@ -115,7 +117,6 @@ func (h *UserHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
     w.WriteHeader(http.StatusNoContent)
 }
 
-// Добавьте этот метод в UserHandler
 func (h *UserHandler) UploadUserAvatar(w http.ResponseWriter, r *http.Request) {
     vars := mux.Vars(r)
     userID, err := strconv.Atoi(vars["id"])
@@ -138,7 +139,7 @@ func (h *UserHandler) UploadUserAvatar(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    file, header, err := r.FormFile("avatar")
+    file, _, err := r.FormFile("avatar")
     if err != nil {
         http.Error(w, "No avatar file provided", http.StatusBadRequest)
         return
