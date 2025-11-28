@@ -1,0 +1,507 @@
+GO MICROSERVICE PROJECT - FULL SOURCE CODE
+Generated on: Fri 28 Nov 2025 22:46:23 MSK
+==================================================
+
+PROJECT STRUCTURE:
+==================
+./docker-compose.yml
+./Dockerfile
+./go.mod
+./handlers/user_handler.go
+./main.go
+./metrics/prometheus.go
+./models/user.go
+./prometheus.yml
+./services/user_service.go
+./utils/logger.go
+./utils/rate_limiter.go
+
+==================================================
+FILE: go.mod
+==================================================
+
+module go-microservice
+
+go 1.25.4
+
+
+==================================================
+FILE: go.sum
+==================================================
+
+FILE NOT FOUND: go.sum
+
+
+==================================================
+FILE: models/user.go
+==================================================
+
+package models
+
+type User struct {
+    ID    int    `json:"id"`
+    Name  string `json:"name"`
+    Email string `json:"email"`
+}
+
+==================================================
+FILE: utils/logger.go
+==================================================
+
+package utils
+
+import (
+    "fmt"
+    "log"
+    "time"
+)
+
+func LogUserAction(action string, userID int) {
+    logMessage := fmt.Sprintf("[%s] Action: %s, UserID: %d", 
+        time.Now().Format(time.RFC3339), action, userID)
+    
+    // В реальном приложении здесь можно писать в файл или отправлять в ELK
+    log.Println(logMessage)
+    
+    // Имитация асинхронной работы
+    go func(msg string) {
+        time.Sleep(100 * time.Millisecond) // имитация задержки
+        fmt.Printf("Async log completed: %s\n", msg)
+    }(logMessage)
+}
+
+==================================================
+FILE: utils/rate_limiter.go
+==================================================
+
+package utils
+
+import (
+    "net/http"
+    "golang.org/x/time/rate"
+)
+
+var Limiter = rate.NewLimiter(rate.Limit(1000), 5000)
+
+func RateLimitMiddleware(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        if !Limiter.Allow() {
+            http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
+            return
+        }
+        next.ServeHTTP(w, r)
+    })
+}
+
+==================================================
+FILE: metrics/prometheus.go
+==================================================
+
+package metrics
+
+import (
+    "net/http"
+    "time"
+    "github.com/gorilla/mux"
+    "github.com/prometheus/client_golang/prometheus"
+    "github.com/prometheus/client_golang/prometheus/promauto"
+    "github.com/prometheus/client_golang/prometheus/promhttp"
+)
+
+var (
+    TotalRequests = promauto.NewCounterVec(
+        prometheus.CounterOpts{
+            Name: "http_requests_total",
+            Help: "Total number of HTTP requests",
+        },
+        []string{"method", "endpoint"},
+    )
+
+    RequestDuration = promauto.NewHistogramVec(
+        prometheus.HistogramOpts{
+            Name: "http_request_duration_seconds",
+            Help: "Request duration in seconds",
+        },
+        []string{"method", "endpoint"},
+    )
+)
+
+func MetricsMiddleware(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        start := time.Now()
+        
+        // Получаем путь для метрик
+        route := mux.CurrentRoute(r)
+        path, _ := route.GetPathTemplate()
+        
+        next.ServeHTTP(w, r)
+        
+        duration := time.Since(start).Seconds()
+        TotalRequests.WithLabelValues(r.Method, path).Inc()
+        RequestDuration.WithLabelValues(r.Method, path).Observe(duration)
+    })
+}
+
+func RegisterMetricsHandler(router *mux.Router) {
+    router.Handle("/metrics", promhttp.Handler())
+}
+
+==================================================
+FILE: services/user_service.go
+==================================================
+
+package services
+
+import (
+    "errors"
+    "go-microservice/models"
+    "sync"
+    "sync/atomic"
+)
+
+type UserService struct {
+    users  map[int]models.User
+    nextID int64
+    mutex  sync.RWMutex
+}
+
+var (
+    userServiceInstance *UserService
+    once                sync.Once
+)
+
+func GetUserService() *UserService {
+    once.Do(func() {
+        userServiceInstance = &UserService{
+            users:  make(map[int]models.User),
+            nextID: 1,
+        }
+    })
+    return userServiceInstance
+}
+
+func (s *UserService) Create(user models.User) models.User {
+    s.mutex.Lock()
+    defer s.mutex.Unlock()
+    
+    user.ID = int(atomic.AddInt64(&s.nextID, 1))
+    s.users[user.ID] = user
+    return user
+}
+
+func (s *UserService) GetByID(id int) (models.User, error) {
+    s.mutex.RLock()
+    defer s.mutex.RUnlock()
+    
+    user, exists := s.users[id]
+    if !exists {
+        return models.User{}, errors.New("user not found")
+    }
+    return user, nil
+}
+
+func (s *UserService) GetAll() []models.User {
+    s.mutex.RLock()
+    defer s.mutex.RUnlock()
+    
+    users := make([]models.User, 0, len(s.users))
+    for _, user := range s.users {
+        users = append(users, user)
+    }
+    return users
+}
+
+func (s *UserService) Update(id int, updatedUser models.User) (models.User, error) {
+    s.mutex.Lock()
+    defer s.mutex.Unlock()
+    
+    if _, exists := s.users[id]; !exists {
+        return models.User{}, errors.New("user not found")
+    }
+    
+    updatedUser.ID = id
+    s.users[id] = updatedUser
+    return updatedUser, nil
+}
+
+func (s *UserService) Delete(id int) error {
+    s.mutex.Lock()
+    defer s.mutex.Unlock()
+    
+    if _, exists := s.users[id]; !exists {
+        return errors.New("user not found")
+    }
+    
+    delete(s.users, id)
+    return nil
+}
+
+==================================================
+FILE: handlers/user_handler.go
+==================================================
+
+package handlers
+
+import (
+    "encoding/json"
+    "net/http"
+    "strconv"
+    
+    "github.com/gorilla/mux"
+    "go-microservice/models"
+    "go-microservice/services"
+    "go-microservice/utils"
+)
+
+type UserHandler struct {
+    userService *services.UserService
+}
+
+func NewUserHandler() *UserHandler {
+    return &UserHandler{
+        userService: services.GetUserService(),
+    }
+}
+
+func (h *UserHandler) GetUsers(w http.ResponseWriter, r *http.Request) {
+    users := h.userService.GetAll()
+    
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(users)
+}
+
+func (h *UserHandler) GetUser(w http.ResponseWriter, r *http.Request) {
+    vars := mux.Vars(r)
+    id, err := strconv.Atoi(vars["id"])
+    if err != nil {
+        http.Error(w, "Invalid user ID", http.StatusBadRequest)
+        return
+    }
+    
+    user, err := h.userService.GetByID(id)
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusNotFound)
+        return
+    }
+    
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(user)
+}
+
+func (h *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
+    var user models.User
+    if err := json.NewDecoder(r.Body).Decode(&user); err != nil {
+        http.Error(w, err.Error(), http.StatusBadRequest)
+        return
+    }
+    
+    // Валидация
+    if user.Name == "" || user.Email == "" {
+        http.Error(w, "Name and email are required", http.StatusBadRequest)
+        return
+    }
+    
+    savedUser := h.userService.Create(user)
+    
+    // Асинхронное логирование
+    go utils.LogUserAction("CREATE", savedUser.ID)
+    
+    w.Header().Set("Content-Type", "application/json")
+    w.WriteHeader(http.StatusCreated)
+    json.NewEncoder(w).Encode(savedUser)
+}
+
+func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
+    vars := mux.Vars(r)
+    id, err := strconv.Atoi(vars["id"])
+    if err != nil {
+        http.Error(w, "Invalid user ID", http.StatusBadRequest)
+        return
+    }
+    
+    var user models.User
+    if err := json.NewDecoder(r.Body).Decode(&user); err != nil {
+        http.Error(w, err.Error(), http.StatusBadRequest)
+        return
+    }
+    
+    updatedUser, err := h.userService.Update(id, user)
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusNotFound)
+        return
+    }
+    
+    // Асинхронное логирование
+    go utils.LogUserAction("UPDATE", updatedUser.ID)
+    
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(updatedUser)
+}
+
+func (h *UserHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
+    vars := mux.Vars(r)
+    id, err := strconv.Atoi(vars["id"])
+    if err != nil {
+        http.Error(w, "Invalid user ID", http.StatusBadRequest)
+        return
+    }
+    
+    if err := h.userService.Delete(id); err != nil {
+        http.Error(w, err.Error(), http.StatusNotFound)
+        return
+    }
+    
+    // Асинхронное логирование
+    go utils.LogUserAction("DELETE", id)
+    
+    w.WriteHeader(http.StatusNoContent)
+}
+
+==================================================
+FILE: main.go
+==================================================
+
+package main
+
+import (
+    "log"
+    "net/http"
+    
+    "github.com/gorilla/mux"
+    "go-microservice/handlers"
+    "go-microservice/metrics"
+    "go-microservice/utils"
+)
+
+func main() {
+    router := mux.NewRouter()
+    
+    userHandler := handlers.NewUserHandler()
+    
+    // API routes с middleware
+    apiRouter := router.PathPrefix("/api").Subrouter()
+    apiRouter.Use(utils.RateLimitMiddleware)
+    apiRouter.Use(metrics.MetricsMiddleware)
+    
+    apiRouter.HandleFunc("/users", userHandler.GetUsers).Methods("GET")
+    apiRouter.HandleFunc("/users/{id}", userHandler.GetUser).Methods("GET")
+    apiRouter.HandleFunc("/users", userHandler.CreateUser).Methods("POST")
+    apiRouter.HandleFunc("/users/{id}", userHandler.UpdateUser).Methods("PUT")
+    apiRouter.HandleFunc("/users/{id}", userHandler.DeleteUser).Methods("DELETE")
+    
+    // Метрики (без rate limiting)
+    metrics.RegisterMetricsHandler(router)
+    
+    // Health check
+    router.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+        w.Header().Set("Content-Type", "application/json")
+        w.Write([]byte(`{"status": "healthy"}`))
+    }).Methods("GET")
+    
+    log.Println("Server starting on :8080")
+    log.Fatal(http.ListenAndServe(":8080", router))
+}
+
+==================================================
+FILE: Dockerfile
+==================================================
+
+FROM golang:1.22-alpine AS builder
+
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN go build -o main .
+
+FROM alpine:latest
+RUN apk --no-cache add ca-certificates
+
+WORKDIR /root/
+COPY --from=builder /app/main .
+
+EXPOSE 8080
+CMD ["./main"]
+
+==================================================
+FILE: docker-compose.yml
+==================================================
+
+version: '3.8'
+
+services:
+  go-microservice:
+    build: .
+    ports:
+      - "8080:8084"
+    environment:
+      - ENVIRONMENT=production
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9094"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    restart: unless-stopped
+
+==================================================
+FILE: prometheus.yml
+==================================================
+
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'go-microservice'
+    static_configs:
+      - targets: ['go-microservice:8084']
+
+==================================================
+TESTING COMMANDS
+==================================================
+
+# Команды для запуска и тестирования:
+
+# 1. Установка зависимостей
+go mod tidy
+
+# 2. Запуск в режиме разработки
+go run main.go
+
+# 3. Тестовые запросы к API
+curl -X POST http://localhost:8080/api/users \
+  -H "Content-Type: application/json" \
+  -d '{"name": "John Doe", "email": "john@example.com"}'
+
+curl http://localhost:8080/api/users
+
+curl http://localhost:8080/metrics
+
+# 4. Сборка Docker образа
+docker-compose build
+
+# 5. Запуск в Docker
+docker-compose up -d
+
+# 6. Нагрузочное тестирование
+wrk -t12 -c500 -d60s http://localhost:8080/api/users
+
+# 7. Остановка Docker
+docker-compose down
+
+==================================================
+PROJECT COLLECTION COMPLETED
+Output file: go-microservice-full-project.txt
