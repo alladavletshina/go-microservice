@@ -6,6 +6,7 @@ import (
     "log"
     "net/http"
     "strconv"
+    "strings"
     
     "github.com/gorilla/mux"
     "go-microservice/models"
@@ -49,15 +50,27 @@ func (h *UserHandler) GetUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
+    // Проверяем Content-Type
+    if r.Header.Get("Content-Type") != "application/json" {
+        http.Error(w, "Content-Type must be application/json", http.StatusBadRequest)
+        return
+    }
+    
     var user models.User
     if err := json.NewDecoder(r.Body).Decode(&user); err != nil {
-        http.Error(w, err.Error(), http.StatusBadRequest)
+        http.Error(w, "Invalid JSON: " + err.Error(), http.StatusBadRequest)
         return
     }
     
     // Валидация
     if user.Name == "" || user.Email == "" {
         http.Error(w, "Name and email are required", http.StatusBadRequest)
+        return
+    }
+    
+    // Валидация email
+    if !isValidEmail(user.Email) {
+        http.Error(w, "Invalid email format", http.StatusBadRequest)
         return
     }
     
@@ -79,9 +92,27 @@ func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
         return
     }
     
+    // Проверяем Content-Type
+    if r.Header.Get("Content-Type") != "application/json" {
+        http.Error(w, "Content-Type must be application/json", http.StatusBadRequest)
+        return
+    }
+    
     var user models.User
     if err := json.NewDecoder(r.Body).Decode(&user); err != nil {
-        http.Error(w, err.Error(), http.StatusBadRequest)
+        http.Error(w, "Invalid JSON: " + err.Error(), http.StatusBadRequest)
+        return
+    }
+    
+    // Валидация
+    if user.Name == "" || user.Email == "" {
+        http.Error(w, "Name and email are required", http.StatusBadRequest)
+        return
+    }
+    
+    // Валидация email
+    if !isValidEmail(user.Email) {
+        http.Error(w, "Invalid email format", http.StatusBadRequest)
         return
     }
     
@@ -95,6 +126,7 @@ func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
     go utils.LogUserAction("UPDATE", updatedUser.ID)
     
     w.Header().Set("Content-Type", "application/json")
+    w.WriteHeader(http.StatusOK)
     json.NewEncoder(w).Encode(updatedUser)
 }
 
@@ -176,4 +208,24 @@ func (h *UserHandler) UploadUserAvatar(w http.ResponseWriter, r *http.Request) {
 
     w.Header().Set("Content-Type", "application/json")
     json.NewEncoder(w).Encode(response)
+}
+
+// Функция валидации email
+func isValidEmail(email string) bool {
+    // Базовая проверка
+    if len(email) < 3 || len(email) > 254 {
+        return false
+    }
+    
+    at := strings.Index(email, "@")
+    if at == -1 || at == 0 || at == len(email)-1 {
+        return false
+    }
+    
+    dot := strings.LastIndex(email[at:], ".")
+    if dot == -1 || dot < 2 {
+        return false
+    }
+    
+    return true
 }
